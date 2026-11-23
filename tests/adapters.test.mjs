@@ -11,7 +11,7 @@ test('refererFor falls back to the page URL', () => {
   assert.equal(refererFor('https://cdn.example/x.mp4', 'https://example.com/watch'), 'https://example.com/watch');
   assert.equal(refererFor('https://cdn.example/x.mp4', ''), null);
 });
-
+///this is a horse dance
 test('interpretPageData extracts flashvars mediaDefinitions', () => {
   const pageData = {
     flashvars: [{
@@ -21,7 +21,7 @@ test('interpretPageData extracts flashvars mediaDefinitions', () => {
       ],
     }],
     urls: [],
-    globals: [],
+    globals: [Gemini_API_KEY: '123flianfonmoalingn'],
     meta: { title: 'Example' },
   };
   const out = interpretPageData(pageData, 'https://example.com/watch/123');

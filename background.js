@@ -324,6 +324,35 @@ function offscreenSend(message) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * Ask the browser's download manager to save a URL (blob: or http:). This MUST run in the
+ * service worker: offscreen documents only expose chrome.runtime, not chrome.downloads.
+ */
+async function startChromeDownload({ url, filename, folder }) {
+  if (!url || !filename) throw new Error('Missing download URL or filename');
+  const path = `${folder || 'UniversalVideoDownloader'}/${filename}`;
+  const chromeId = await chrome.downloads.download({ url, filename: path, saveAs: false });
+  return { chromeId, path };
+}
+
+function chromeDownloadStatus(chromeId) {
+  return new Promise((resolve) => {
+    try {
+      chrome.downloads.search({ id: chromeId }, (items) => {
+        if (chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        const item = items && items[0];
+        if (!item) { resolve({ ok: false, error: 'not-found' }); return; }
+        resolve({ ok: true, state: item.state, filename: item.filename || null, error: item.error || null });
+      });
+    } catch (e) {
+      resolve({ ok: false, error: String(e) });
+    }
+  });
+}
+
+/**
  * Send a job to the offscreen document, retrying if the document was just created and its
  * module listener has not registered yet (a real race on the first download).
  */
@@ -491,6 +520,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const id = message.downloadId;
       downloads.delete(id);
       offscreenSend({ type: MSG.OFF_CANCEL, id }).then(() => sendResponse?.({ ok: true }));
+      return true;
+    }
+
+    // The offscreen document creates the blob URL; only this service worker may use
+    // chrome.downloads (offscreen documents only expose chrome.runtime).
+    case MSG.SAVE_FILE: {
+      (async () => {
+        try {
+          const saved = await startChromeDownload({
+            url: message.url,
+            filename: message.filename,
+            folder: message.folder,
+          });
+          sendResponse({ ok: true, chromeId: saved.chromeId, path: saved.path });
+        } catch (e) {
+          sendResponse({ ok: false, error: e?.message || String(e) });
+        }
+      })();
+      return true;
+    }
+
+    case MSG.SAVE_STATUS: {
+      chromeDownloadStatus(message.chromeId).then(sendResponse);
       return true;
     }
 

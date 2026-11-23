@@ -1,7 +1,7 @@
 // offscreen.js
 // Universal Video Downloader — offscreen document (module).
-// Downloads and remuxes media using OPFS (disk-backed, low memory) and hands the finished file
-// to chrome.downloads. Strategies:
+// Downloads and remuxes media using OPFS (disk-backed, low memory). The finished blob URL is
+// handed to the service worker, which owns chrome.downloads (offscreen docs only get runtime).
 //   - progressive: stream fetch -> OPFS -> disk-backed File -> save
 //   - HLS muxed fMP4: stream init + segments -> OPFS concatenation (no re-processing)
 //   - HLS TS: incremental transmux via modules/hls2mp4 -> OPFS-backed Blob -> save
@@ -185,47 +185,38 @@ async function fetchText(job, url) {
 
 /* ------------------------------------------------------------------ saving */
 
-function waitForDownload(chromeId, timeoutMs = 15 * 60 * 1000) {
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = (ok) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      try { chrome.downloads.onChanged.removeListener(onChanged); } catch {}
-      resolve(ok);
-    };
-    const onChanged = (delta) => {
-      if (delta.id !== chromeId || !delta.state) return;
-      if (delta.state.current === 'complete') finish(true);
-      else if (delta.state.current === 'interrupted') finish(false);
-    };
-    const timer = setTimeout(() => finish(false), timeoutMs);
-    try { chrome.downloads.onChanged.addListener(onChanged); } catch {}
-    try {
-      chrome.downloads.search({ id: chromeId }, (items) => {
-        const item = items && items[0];
-        if (!item) return;
-        if (item.state === 'complete') finish(true);
-        else if (item.state === 'interrupted') finish(false);
-      });
-    } catch {}
-  });
+async function startChromeDownload({ url, filename, folder }) {
+  const resp = await chrome.runtime.sendMessage({ type: MSG.SAVE_FILE, url, filename, folder });
+  if (!resp || !resp.ok) throw new Error(resp?.error || 'Could not start the browser download');
+  return resp.chromeId;
+}
+
+/** Poll the service worker until Chrome reports the save as complete/interrupted. */
+async function waitForChromeDownload(chromeId, timeoutMs = 15 * 60 * 1000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = 'save did not complete';
+  while (Date.now() < deadline) {
+    const resp = await chrome.runtime.sendMessage({ type: MSG.SAVE_STATUS, chromeId });
+    if (resp && resp.ok) {
+      if (resp.state === 'complete') return resp;
+      if (resp.state === 'interrupted') throw new Error(resp.error || 'Download interrupted while saving');
+      lastError = resp.state || lastError;
+    } else if (resp && resp.error && resp.error !== 'not-found') {
+      lastError = resp.error;
+    }
+    await sleep(500);
+  }
+  throw new Error(`Timed out while saving (${lastError})`);
 }
 
 async function saveBlob(blob, filename, folder, id) {
   const url = URL.createObjectURL(blob);
   try {
-    const chromeId = await chrome.downloads.download({
-      url,
-      filename: `${folder || 'UniversalVideoDownloader'}/${filename}`,
-      saveAs: false,
-    });
+    const chromeId = await startChromeDownload({ url, filename, folder });
     postProgress(id, { progress: 99, status: 'Saving file…' });
-    const ok = await waitForDownload(chromeId);
-    if (!ok) throw new Error('Download interrupted while saving');
+    const done = await waitForChromeDownload(chromeId);
     setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 120000);
-    return { chromeId };
+    return { chromeId, path: done.filename || null };
   } catch (e) {
     try { URL.revokeObjectURL(url); } catch {}
     throw e;
@@ -296,14 +287,9 @@ async function relayToWriter(job, writer, knownTotal = 0) {
 async function downloadUrlWithChrome(job) {
   // Last resort: hand the URL to the browser download manager (it can use the granted host
   // permission and its own cookie jar). Works for progressive files; not for manifests.
-  const id = await chrome.downloads.download({
-    url: job.url,
-    filename: `${job.folder || 'UniversalVideoDownloader'}/${job.filename}`,
-    saveAs: false,
-  });
+  const chromeId = await startChromeDownload({ url: job.url, filename: job.filename, folder: job.folder });
   postProgress(job.id, { progress: 99, status: 'Saving via browser…' });
-  const ok = await waitForDownload(id);
-  if (!ok) throw new Error('Browser download failed');
+  await waitForChromeDownload(chromeId);
 }
 
 async function downloadProgressive(job) {

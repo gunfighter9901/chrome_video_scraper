@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Universal Video Downloader</title>
+    <style>
+      :root { --uv-bg:#0f1115; --uv-panel:#171a21; --uv-panel2:#1d2129; --uv-border:#2a2f3a; --uv-text:#e8eaf0; --uv-muted:#98a2b3; --uv-accent:#3b82f6; --uv-accent2:#2563eb; --uv-ok:#22c55e; --uv-err:#ef4444; }
+      * { box-sizing: border-box; }
+      body { margin:0; width:400px; max-height:600px; background:var(--uv-bg); color:var(--uv-text);
+        font:13px/1.45 system-ui,Segoe UI,Roboto,sans-serif; }
+      header { display:flex; align-items:center; justify-content:space-between; padding:12px 14px;
+        background:linear-gradient(135deg,var(--uv-accent),var(--uv-accent2)); }
+      header h1 { font-size:14px; margin:0; font-weight:700; letter-spacing:.2px; }
+      header .actions button { background:rgba(255,255,255,.15); border:0; color:#fff; border-radius:7px;
+        padding:5px 10px; font-size:12px; cursor:pointer; }
+      header .actions button:hover { background:rgba(255,255,255,.28); }
+      #page { padding:8px 14px; color:var(--uv-muted); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-bottom:1px solid var(--uv-border); }
+      #state { padding:26px 14px; text-align:center; color:var(--uv-muted); }
+      .spinner { width:22px; height:22px; margin:0 auto 10px; border:2px solid var(--uv-border);
+        border-top-color:var(--uv-accent); border-radius:50%; animation:spin .8s linear infinite; }
+      @keyframes spin { to { transform:rotate(360deg); } }
+      .item { margin:10px 12px; background:var(--uv-panel); border:1px solid var(--uv-border); border-radius:10px; overflow:hidden; }
+      .item-head { display:flex; gap:10px; padding:10px; }
+      .thumb { width:72px; height:44px; flex:0 0 72px; border-radius:6px; background:#11141a; object-fit:cover; }
+      .item-title { font-weight:600; font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .item-sub { color:var(--uv-muted); font-size:11px; margin-top:3px; display:flex; gap:6px; flex-wrap:wrap; }
+      .badge { background:var(--uv-panel2); border:1px solid var(--uv-border); border-radius:99px; padding:1px 7px; font-size:10px; }
+      .badge.drm { color:#fecaca; border-color:#7f1d1d; background:#2a1215; }
+      .item-actions { display:flex; gap:8px; padding:0 10px 10px; }
+      select { flex:1; background:var(--uv-panel2); color:var(--uv-text); border:1px solid var(--uv-border); border-radius:8px; padding:7px 8px; font-size:12px; }
+      button.dl { background:linear-gradient(135deg,var(--uv-accent),var(--uv-accent2)); color:#fff; border:0; border-radius:8px; padding:7px 14px; font-weight:600; cursor:pointer; }
+      button.dl:disabled { background:#39404d; cursor:not-allowed; color:#9aa4b2; }
+      .status { padding:0 12px 10px; font-size:11px; color:var(--uv-muted); }
+      .status .bar { height:6px; background:var(--uv-panel2); border-radius:99px; overflow:hidden; margin-top:5px; }
+      .status .bar > i { display:block; height:100%; width:0; background:linear-gradient(90deg,var(--uv-accent),var(--uv-ok)); transition:width .2s; }
+      .note { margin:10px 14px 16px; color:var(--uv-muted); font-size:11px; line-height:1.5; }
+      .note b { color:var(--uv-text); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Universal Video Downloader</h1>
+      <div class="actions"><button id="rescan" type="button">Rescan</button></div>
+    </header>
+    <div id="page"></div>
+    <div id="state"><div class="spinner"></div>Detecting media…</div>
+    <div id="list"></div>
+    <div class="note hidden" id="note">
+      <b>Tip:</b> press play on the video first, then <b>Rescan</b>. If nothing is found, the site may use DRM
+      (not supported) or a protected delivery method.
+    </div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

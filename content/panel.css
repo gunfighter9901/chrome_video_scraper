@@ -1,0 +1,22 @@
+/* content/panel.css — styles for the in-page progress panel (injected via chrome.scripting.insertCSS) */
+#uv-panel {
+  position: fixed; top: 16px; right: -380px; width: 340px; max-height: 70vh;
+  background: #15171c; color: #e8eaf0; border: 1px solid #2c2f38; border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .45); z-index: 2147483646;
+  font: 13px/1.4 system-ui, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column;
+  overflow: hidden; transition: right .25s ease;
+}
+#uv-panel.show { right: 16px; }
+#uv-panel .uv-head {
+  display: flex; align-items: center; justify-content: space-between; padding: 10px 14px;
+  background: linear-gradient(135deg, #3b82f6, #2563eb); font-weight: 600; font-size: 13px;
+}
+#uv-panel .uv-head button { background: none; border: 0; color: #fff; font-size: 16px; cursor: pointer; line-height: 1; }
+#uv-panel .uv-body { padding: 8px 10px; overflow-y: auto; }
+.uv-item { background: #1d2027; border: 1px solid #2c2f38; border-radius: 9px; padding: 10px; margin-bottom: 8px; }
+.uv-item .uv-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; }
+.uv-item .uv-status { color: #98a2b3; font-size: 11px; margin-bottom: 6px; }
+.uv-bar { height: 7px; background: #2c2f38; border-radius: 99px; overflow: hidden; }
+.uv-bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #3b82f6, #22c55e); transition: width .2s; }
+.uv-item .uv-meta { display: flex; justify-content: space-between; font-size: 11px; color: #98a2b3; margin-top: 5px; }
+.uv-item .uv-cancel { float: right; background: none; border: 1px solid #2c2f38; color: #98a2b3; border-radius: 5px; cursor: pointer; font-size: 11px; padding: 1px 6px; }

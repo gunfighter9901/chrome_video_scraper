@@ -1,0 +1,8 @@
+/* content/button.css — styles for the in-player download button (injected via chrome.scripting.insertCSS) */
+#uv-download-button {
+  position: absolute; top: 10px; right: 10px; z-index: 2147483640; display: inline-flex; align-items: center; gap: 6px;
+  background: linear-gradient(135deg, #3b82f6, #2563eb); color: #fff; border: 0; border-radius: 8px; padding: 6px 12px;
+  font: 600 13px system-ui, "Segoe UI", Roboto, sans-serif; cursor: pointer; box-shadow: 0 4px 14px rgba(0, 0, 0, .35); opacity: .92;
+}
+#uv-download-button:hover { opacity: 1; }
+#uv-download-button[data-busy="1"] { background: #475569; cursor: progress; }

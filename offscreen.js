@@ -429,10 +429,16 @@ async function downloadHlsTs(job, segments, durationSec) {
   await saveBlob(blob, job.filename, job.folder, job.id);
 }
 
+/** Live playlists have no ENDLIST; downloading a snapshot would produce a truncated file. */
+function assertVod(parsed) {
+  if (!parsed.isMaster && parsed.live) throw new Error('Live streams are not supported');
+}
+
 async function downloadHls(job) {
   const { text, finalUrl } = await fetchText(job, job.url);
   const parsed = parseM3U8(text, finalUrl);
   if (parsed.drm) throw new Error('DRM-protected stream');
+  assertVod(parsed);
   let variants = parsed.variants;
   let chosen = null;
   if (parsed.isMaster && variants.length) {
@@ -440,6 +446,7 @@ async function downloadHls(job) {
     const child = await fetchText(job, chosen.url);
     const childParsed = parseM3U8(child.text, child.finalUrl);
     if (childParsed.drm) throw new Error('DRM-protected stream');
+    assertVod(childParsed);
     const segments = childParsed.segments;
     if (!segments.length) throw new Error('No segments found in playlist');
     const isFmp4 = isFmp4Segments(segments);

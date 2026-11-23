@@ -188,6 +188,28 @@ export function buildFilename(title, { ext = 'mp4', quality = '', id = '' } = {}
   return `${base}${suffix}.${ext}`;
 }
 
+const MIME_EXT = [
+  [/webm/i, 'webm'],
+  [/matroska/i, 'mkv'],
+  [/quicktime/i, 'mov'],
+  [/flv/i, 'flv'],
+  [/mp4|m4v/i, 'mp4'],
+];
+
+/** Output extension for a variant. HLS/DASH are always remuxed to MP4. */
+export function extensionForVariant(variant, fallback = 'mp4') {
+  if (!variant) return fallback;
+  if (variant.kind === KINDS.HLS || variant.kind === KINDS.DASH) return 'mp4';
+  const mime = String(variant.mimeType || '');
+  for (const [re, ext] of MIME_EXT) if (re.test(mime)) return ext;
+  const match = String(variant.url || '').match(/\.(mp4|m4v|webm|mkv|mov|flv)(?:[?#]|$)/i);
+  if (match) {
+    const ext = match[1].toLowerCase();
+    return ext === 'm4v' ? 'mp4' : ext;
+  }
+  return fallback;
+}
+
 export function formatBytes(bytes) {
   if (!bytes || bytes <= 0) return '0 B';
   const k = 1024; const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];

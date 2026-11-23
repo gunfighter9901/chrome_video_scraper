@@ -8,7 +8,7 @@ import { parseM3U8 } from './core/hls.mjs';
 import { parseMpd } from './core/dash.mjs';
 import {
   KINDS, classifyUrl, mediaKey, sortVariants, normalizeVariant, variantHeight,
-  buildFilename, decideOutputPolicy, deviceProfile,
+  buildFilename, extensionForVariant, decideOutputPolicy, deviceProfile,
 } from './core/formats.mjs';
 import { interpretPageData, refererFor, getAdapter } from './core/adapters.mjs';
 
@@ -389,7 +389,7 @@ async function startDownload({ tabId, item, variant, pageUrl }) {
   const referer = item.referer || refererFor(variant.url, pageUrl) || pageUrl || null;
   const quality = variantHeight(variant) ? `${variantHeight(variant)}p` : '';
   const folder = settings.folder;
-  const filename = buildFilename(item.title || 'video', { ext: 'mp4', quality });
+  const filename = buildFilename(item.title || 'video', { ext: extensionForVariant(variant), quality });
   const policy = decideOutputPolicy({
     sizeBytes: variant.sizeBytes || 0,
     videoCodec: variant.videoCodec || '',

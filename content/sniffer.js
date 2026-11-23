@@ -8,7 +8,8 @@
   if (window.__uvSnifferLoaded) return;
   window.__uvSnifferLoaded = true;
 
-  const MEDIA_RE = /\.(m3u8|mpd|mp4|m4v|webm|mkv|mov|flv)(\?|#|$)/i;
+  const MEDIA_RE = /\.(m3u8|mpd|mp4|m4v|webm|mkv|mov|flv|gif|webp|apng)(\?|#|$)/i;
+  const GIF_RE = /\.(gif|webp|apng)(\?|#|$)/i;
   const SEGMENT_RE = /\.(ts|m4s|m2ts)(\?|#|$)/i;
 
   const state = {
@@ -22,6 +23,8 @@
     const ct = String(contentType || '').toLowerCase();
     if (/\.m3u8(\?|#|$)/i.test(u) || ct.includes('mpegurl')) return 'hls';
     if (/\.mpd(\?|#|$)/i.test(u) || ct.includes('dash+xml')) return 'dash';
+    if (GIF_RE.test(u) || ct.includes('image/gif') || (ct.includes('image/webp') && /\.webp/i.test(u))) return 'gif';
+    if (ct.includes('image/gif') || ct.includes('image/webp')) return 'gif';
     if (!/^(blob|data):/i.test(u) && (/\.(mp4|m4v|webm|mkv|mov|flv)(\?|#|$)/i.test(u) || (ct.startsWith('video/') && !ct.includes('mp2t')))) return 'progressive';
     return null;
   }
@@ -60,11 +63,39 @@
         const src = el.currentSrc || el.src || el.getAttribute('src') || el.getAttribute('data-src');
         add(out, seen, src, { source: 'dom' });
       });
+      // Global GIF scrape: <img> is the primary GIF carrier (Giphy/Tenor/boards/avatars).
+      document.querySelectorAll('img[src], img[data-src], img[data-lazy-src], img[srcset], img[data-srcset]').forEach((el) => {
+        const src = el.currentSrc || el.src || el.getAttribute('src') || el.getAttribute('data-src') || el.getAttribute('data-lazy-src');
+        add(out, seen, src, { source: 'gif-dom-img' });
+        const srcset = el.getAttribute('srcset') || el.getAttribute('data-srcset');
+        if (srcset) {
+          // srcset: "a.gif 1x, b.gif 2x" — take each URL.
+          for (const part of srcset.split(',')) {
+            const u = part.trim().split(/\s+/)[0];
+            add(out, seen, u, { source: 'gif-dom-srcset' });
+          }
+        }
+      });
+      // CSS background GIFs (lazy tiles, stickers) — bounded to first 300 nodes.
+      try {
+        const els = document.querySelectorAll('div, span, a, figure, picture');
+        for (let i = 0; i < Math.min(els.length, 300); i++) {
+          const bg = getComputedStyle(els[i]).backgroundImage || '';
+          const m = bg.match(/url\(["']?(https?:[^"')]+)["']?\)/i);
+          if (m && GIF_RE.test(m[1])) add(out, seen, m[1], { source: 'gif-dom-bg' });
+        }
+      } catch {}
+      document.querySelectorAll('video[poster]').forEach((el) => {
+        const p = el.getAttribute('poster');
+        if (p && GIF_RE.test(p)) add(out, seen, p, { source: 'gif-dom-poster' });
+      });
       const metaEls = [
         ['meta[property="og:video"]', 'content'],
         ['meta[property="og:video:url"]', 'content'],
         ['meta[property="og:video:secure_url"]', 'content'],
         ['meta[name="twitter:player:stream"]', 'content'],
+        ['meta[property="og:image"]', 'content'],
+        ['meta[name="twitter:image"]', 'content'],
       ];
       for (const [sel, attrName] of metaEls) {
         const el = document.querySelector(sel);

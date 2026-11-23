@@ -1,7 +1,7 @@
 // offscreen.js
 // Universal Video Downloader — offscreen document (module).
-// Downloads and remuxes media using OPFS (disk-backed, low memory) and hands the finished file
-// to chrome.downloads. Strategies:
+// Downloads and remuxes media using OPFS (disk-backed, low memory). The finished blob URL is
+// handed to the service worker, which owns chrome.downloads (offscreen docs only get runtime).
 //   - progressive: stream fetch -> OPFS -> disk-backed File -> save
 //   - HLS muxed fMP4: stream init + segments -> OPFS concatenation (no re-processing)
 //   - HLS TS: incremental transmux via modules/hls2mp4 -> OPFS-backed Blob -> save
@@ -168,7 +168,6 @@ async function fetchSegment(job, url, { range, signal } = {}) {
       const backoff = 400 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 300);
       postProgress(job.id, { status: `Retry ${attempt}/${MAX_SEGMENT_RETRIES}…` });
       await sleep(backoff);
-      await sleep(backoff);
     }
   }
 }
@@ -185,47 +184,38 @@ async function fetchText(job, url) {
 
 /* ------------------------------------------------------------------ saving */
 
-function waitForDownload(chromeId, timeoutMs = 15 * 60 * 1000) {
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = (ok) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      try { chrome.downloads.onChanged.removeListener(onChanged); } catch {}
-      resolve(ok);
-    };
-    const onChanged = (delta) => {
-      if (delta.id !== chromeId || !delta.state) return;
-      if (delta.state.current === 'complete') finish(true);
-      else if (delta.state.current === 'interrupted') finish(false);
-    };
-    const timer = setTimeout(() => finish(false), timeoutMs);
-    try { chrome.downloads.onChanged.addListener(onChanged); } catch {}
-    try {
-      chrome.downloads.search({ id: chromeId }, (items) => {
-        const item = items && items[0];
-        if (!item) return;
-        if (item.state === 'complete') finish(true);
-        else if (item.state === 'interrupted') finish(false);
-      });
-    } catch {}
-  });
+async function startChromeDownload({ url, filename, folder }) {
+  const resp = await chrome.runtime.sendMessage({ type: MSG.SAVE_FILE, url, filename, folder });
+  if (!resp || !resp.ok) throw new Error(resp?.error || 'Could not start the browser download');
+  return resp.chromeId;
+}
+
+/** Poll the service worker until Chrome reports the save as complete/interrupted. */
+async function waitForChromeDownload(chromeId, timeoutMs = 15 * 60 * 1000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = 'save did not complete';
+  while (Date.now() < deadline) {
+    const resp = await chrome.runtime.sendMessage({ type: MSG.SAVE_STATUS, chromeId });
+    if (resp && resp.ok) {
+      if (resp.state === 'complete') return resp;
+      if (resp.state === 'interrupted') throw new Error(resp.error || 'Download interrupted while saving');
+      lastError = resp.state || lastError;
+    } else if (resp && resp.error && resp.error !== 'not-found') {
+      lastError = resp.error;
+    }
+    await sleep(500);
+  }
+  throw new Error(`Timed out while saving (${lastError})`);
 }
 
 async function saveBlob(blob, filename, folder, id) {
   const url = URL.createObjectURL(blob);
   try {
-    const chromeId = await chrome.downloads.download({
-      url,
-      filename: `${folder || 'UniversalVideoDownloader'}/${filename}`,
-      saveAs: false,
-    });
+    const chromeId = await startChromeDownload({ url, filename, folder });
     postProgress(id, { progress: 99, status: 'Saving file…' });
-    const ok = await waitForDownload(chromeId);
-    if (!ok) throw new Error('Download interrupted while saving');
+    const done = await waitForChromeDownload(chromeId);
     setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 120000);
-    return { chromeId };
+    return { chromeId, path: done.filename || null };
   } catch (e) {
     try { URL.revokeObjectURL(url); } catch {}
     throw e;
@@ -238,11 +228,13 @@ async function streamDirectToWriter(job, writer) {
   const controller = abortControllerFor(job.id);
   let downloaded = 0;
   let total = job.sizeBytes || 0;
-  const resp = await fetch(job.url, fetchOptions(job, { accept: 'video/*,*/*', signal: controller.signal }));
+  const isGif = job.kind === KINDS.GIF;
+  const accept = isGif ? 'image/gif,image/webp,image/*,*/*' : 'video/*,*/*';
+  const resp = await fetch(job.url, fetchOptions(job, { accept, signal: controller.signal }));
   if (!resp.ok) throw Object.assign(new Error(`HTTP ${resp.status}`), { status: resp.status });
   total = parseInt(resp.headers.get('content-length') || '0', 10) || total;
   const reader = resp.body.getReader();
-  postProgress(job.id, { progress: 0, downloaded: 0, total, status: 'Downloading…' });
+  postProgress(job.id, { progress: 0, downloaded: 0, total, status: isGif ? 'Downloading GIF…' : 'Downloading…' });
   let last = 0;
   for (;;) {
     if (isCancelled(job.id)) throw new Error('cancelled');
@@ -250,10 +242,12 @@ async function streamDirectToWriter(job, writer) {
     if (done) break;
     await writer.write(value);
     downloaded += value.byteLength;
-    const progress = total > 0 ? Math.min(97, (downloaded / total) * 97) : 50;
+    // FIX (progress): total now comes from job.sizeBytes (probe HEAD) when the
+    // server omits content-length, so the bar moves instead of sticking at 50%.
+    const progress = total > 0 ? Math.min(97, (downloaded / total) * 97) : (downloaded > 0 ? 50 + Math.min(47, downloaded / 1048576) : 0);
     if (performance.now() - last > 400) {
       last = performance.now();
-      postProgress(job.id, { progress, downloaded, total, status: 'Downloading…' });
+      postProgress(job.id, { progress, downloaded, total, status: isGif ? 'Downloading GIF…' : 'Downloading…' });
     }
   }
   return { downloaded, total };
@@ -296,14 +290,9 @@ async function relayToWriter(job, writer, knownTotal = 0) {
 async function downloadUrlWithChrome(job) {
   // Last resort: hand the URL to the browser download manager (it can use the granted host
   // permission and its own cookie jar). Works for progressive files; not for manifests.
-  const id = await chrome.downloads.download({
-    url: job.url,
-    filename: `${job.folder || 'UniversalVideoDownloader'}/${job.filename}`,
-    saveAs: false,
-  });
+  const chromeId = await startChromeDownload({ url: job.url, filename: job.filename, folder: job.folder });
   postProgress(job.id, { progress: 99, status: 'Saving via browser…' });
-  const ok = await waitForDownload(id);
-  if (!ok) throw new Error('Browser download failed');
+  await waitForChromeDownload(chromeId);
 }
 
 async function downloadProgressive(job) {
@@ -443,10 +432,16 @@ async function downloadHlsTs(job, segments, durationSec) {
   await saveBlob(blob, job.filename, job.folder, job.id);
 }
 
+/** Live playlists have no ENDLIST; downloading a snapshot would produce a truncated file. */
+function assertVod(parsed) {
+  if (!parsed.isMaster && parsed.live) throw new Error('Live streams are not supported');
+}
+
 async function downloadHls(job) {
   const { text, finalUrl } = await fetchText(job, job.url);
   const parsed = parseM3U8(text, finalUrl);
   if (parsed.drm) throw new Error('DRM-protected stream');
+  assertVod(parsed);
   let variants = parsed.variants;
   let chosen = null;
   if (parsed.isMaster && variants.length) {
@@ -454,6 +449,7 @@ async function downloadHls(job) {
     const child = await fetchText(job, chosen.url);
     const childParsed = parseM3U8(child.text, child.finalUrl);
     if (childParsed.drm) throw new Error('DRM-protected stream');
+    assertVod(childParsed);
     const segments = childParsed.segments;
     if (!segments.length) throw new Error('No segments found in playlist');
     const isFmp4 = isFmp4Segments(segments);
@@ -486,6 +482,7 @@ async function downloadDash(job) {
   const writer = await createWritable(nextName('dash'));
   const target = new StreamTarget(writer.writable, { chunked: false });
   const output = new Output({ format: new Mp4OutputFormat({ fastStart: 'fragmented', minimumFragmentDuration: 1 }), target });
+  const videoList = job.segments || [];
 
   let videoSource = null;
   let audioSource = null;
@@ -535,7 +532,6 @@ async function downloadDash(job) {
   };
 
   try {
-    const videoList = job.segments || [];
     if (!videoList.length) throw new Error('DASH manifest could not be parsed - press Rescan and retry');
     await feedList(videoList, job.initUrl, 0, 80);
     if (job.audio && job.audio.segments && job.audio.segments.length) {
@@ -575,6 +571,8 @@ async function processJob(job) {
     } else if (job.kind === KINDS.HLS) {
       await downloadHls(job);
     } else {
+      // KINDS.PROGRESSIVE and KINDS.GIF (global GIF scrape plugin) share the
+      // single-file OPFS streaming path — GIFs need no remux, just save as-is.
       await downloadProgressive(job);
     }
     if (isCancelled(job.id)) { postError(job.id, 'cancelled'); return; }

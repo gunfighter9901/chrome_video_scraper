@@ -22,14 +22,22 @@ export async function orderedPipeline(items, concurrency, worker, onResult) {
   let nextToDeliver = 0;
   const limit = Math.max(1, Math.floor(concurrency) || 1);
 
-  const drain = async () => {
-    while (results.has(nextToDeliver)) {
-      const value = results.get(nextToDeliver);
-      results.delete(nextToDeliver);
-      const index = nextToDeliver;
-      nextToDeliver++;
-      await onResult(value, index);
-    }
+  // Serialize ordered delivery: multiple runners may finish concurrently, but
+  // onResult (writer.write / transmux push) must never run concurrently or
+  // out of order or the MP4 will be corrupt. Chain drains through one promise.
+  let drainChain = Promise.resolve();
+  const drain = () => {
+    const runDrain = async () => {
+      while (results.has(nextToDeliver)) {
+        const value = results.get(nextToDeliver);
+        results.delete(nextToDeliver);
+        const index = nextToDeliver;
+        nextToDeliver++;
+        await onResult(value, index);
+      }
+    };
+    drainChain = drainChain.then(runDrain, runDrain);
+    return drainChain;
   };
 
   const run = async () => {
@@ -45,6 +53,7 @@ export async function orderedPipeline(items, concurrency, worker, onResult) {
   const runners = [];
   for (let c = 0; c < limit; c++) runners.push(run());
   await Promise.all(runners);
+  await drainChain;
 }
 
 /**

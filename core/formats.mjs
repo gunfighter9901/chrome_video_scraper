@@ -2,9 +2,9 @@
 // Pure helpers: URL/kind classification, variant normalization/sorting, naming, and the
 // size-based output policy (<= threshold may transcode, > threshold is remux-only).
 
-export const KINDS = Object.freeze({ HLS: 'hls', DASH: 'dash', PROGRESSIVE: 'progressive', UNKNOWN: 'unknown' });
+export const KINDS = Object.freeze({ HLS: 'hls', DASH: 'dash', PROGRESSIVE: 'progressive', GIF: 'gif', UNKNOWN: 'unknown' });
 
-const MEDIA_EXT = /\.(mp4|m4v|webm|mkv|mov|flv|avi|wmv|m4s|ts|m2ts|mpd|m3u8)(\?|#|$)/i;
+const MEDIA_EXT = /\.(mp4|m4v|webm|mkv|mov|flv|avi|wmv|m4s|ts|m2ts|mpd|m3u8|gif|webp|apng)(\?|#|$)/i;
 const SEGMENT_EXT = /\.(ts|m4s|m2ts|aac|cmfv|cmfa)(\?|#|$)/i;
 
 /** Classify a URL by extension and/or content type. Returns one of KINDS or null. */
@@ -13,6 +13,13 @@ export function classifyUrl(url, contentType = '') {
   const ct = String(contentType || '').toLowerCase();
   if (/\.m3u8(\?|#|$)/i.test(u) || ct.includes('mpegurl')) return KINDS.HLS;
   if (/\.mpd(\?|#|$)/i.test(u) || ct.includes('dash+xml')) return KINDS.DASH;
+  if (/\.gif(\?|#|$)/i.test(u) || ct.includes('image/gif')) return KINDS.GIF;
+  if (/\.webp(\?|#|$)/i.test(u) && (ct.includes('image/webp') || ct === '')) {
+    // Animated webp is the modern gif replacement — surface it with the gif scraper.
+    // Static webp images are still useful to download, so keep them as GIF kind.
+    return KINDS.GIF;
+  }
+  if (ct.includes('image/gif') || ct.includes('image/webp')) return KINDS.GIF;
   if (ct.startsWith('video/')) {
     if (ct.includes('mp2t')) return null; // a TS segment, not a standalone asset
     return KINDS.PROGRESSIVE;
@@ -188,6 +195,36 @@ export function buildFilename(title, { ext = 'mp4', quality = '', id = '' } = {}
   return `${base}${suffix}.${ext}`;
 }
 
+const MIME_EXT = [
+  [/webm/i, 'webm'],
+  [/matroska/i, 'mkv'],
+  [/quicktime/i, 'mov'],
+  [/flv/i, 'flv'],
+  [/mp4|m4v/i, 'mp4'],
+];
+
+/** Output extension for a variant. HLS/DASH are always remuxed to MP4. */
+export function extensionForVariant(variant, fallback = 'mp4') {
+  if (!variant) return fallback;
+  if (variant.kind === KINDS.HLS || variant.kind === KINDS.DASH) return 'mp4';
+  if (variant.kind === KINDS.GIF) {
+    const m = String(variant.url || '').match(/\.(gif|webp|apng)(?:[?#]|$)/i);
+    if (m) return m[1].toLowerCase();
+    const mime = String(variant.mimeType || '').toLowerCase();
+    if (mime.includes('webp')) return 'webp';
+    if (mime.includes('png')) return 'apng';
+    return 'gif';
+  }
+  const mime = String(variant.mimeType || '');
+  for (const [re, ext] of MIME_EXT) if (re.test(mime)) return ext;
+  const match = String(variant.url || '').match(/\.(mp4|m4v|webm|mkv|mov|flv)(?:[?#]|$)/i);
+  if (match) {
+    const ext = match[1].toLowerCase();
+    return ext === 'm4v' ? 'mp4' : ext;
+  }
+  return fallback;
+}
+
 export function formatBytes(bytes) {
   if (!bytes || bytes <= 0) return '0 B';
   const k = 1024; const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -209,6 +246,10 @@ export function formatDuration(seconds) {
 export function variantLabel(v) {
   if (!v) return 'Unknown';
   const h = variantHeight(v);
+  if (v.kind === KINDS.GIF) {
+    const size = v.sizeBytes ? ` · ${formatBytes(v.sizeBytes)}` : '';
+    return `${v.label && v.label !== 'default' ? v.label : 'GIF'} · GIF${size}`;
+  }
   const kindLabel = v.kind === KINDS.HLS ? 'HLS' : v.kind === KINDS.DASH ? 'DASH' : 'MP4';
   const size = v.sizeBytes ? ` · ${formatBytes(v.sizeBytes)}` : '';
   return `${h ? `${h}p` : (v.label || 'default')} · ${kindLabel}${size}`;

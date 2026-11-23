@@ -8,9 +8,10 @@ import { parseM3U8 } from './core/hls.mjs';
 import { parseMpd } from './core/dash.mjs';
 import {
   KINDS, classifyUrl, mediaKey, sortVariants, normalizeVariant, variantHeight,
-  buildFilename, decideOutputPolicy, deviceProfile,
+  buildFilename, extensionForVariant, decideOutputPolicy, deviceProfile,
 } from './core/formats.mjs';
 import { interpretPageData, refererFor, getAdapter } from './core/adapters.mjs';
+import { GIF_PLUGIN_ID, mergeGifCandidates, gifKey } from './core/gifPlugin.mjs';
 
 const CONTENT_FILES = ['content/sniffer.js', 'content/panel.js', 'content/button.js'];
 const CONTENT_CSS = ['content/panel.css', 'content/button.css'];
@@ -88,13 +89,23 @@ function mergeCandidates(snapshot) {
     if (!url || !/^https?:/i.test(url)) return;
     const kind = (raw && raw.kind) || classifyUrl(url, (raw && raw.contentType) || '');
     if (!kind) return;
-    const key = mediaKey(url);
+    // GIFs dedupe by host+path (query-insensitive) — signed GIF URLs differ per load.
+    const key = kind === KINDS.GIF ? gifKey(url) : mediaKey(url);
     if (seen.has(key)) return;
     seen.add(key);
     out.push({ url, kind, contentType: (raw && raw.contentType) || null, source: (raw && raw.source) || 'sniff' });
   };
   for (const c of snapshot.candidates || []) push(c);
   for (const c of interpretPageData(snapshot.pageData, snapshot.page?.url)) push(c);
+  // Global GIF scrape plugin: merges page/globals/dom/perf GIFs (additive, deduped).
+  try {
+    for (const c of mergeGifCandidates({
+      pageData: snapshot.pageData || {},
+      globals: (snapshot.pageData && snapshot.pageData.globals) || [],
+      domUrls: (snapshot.candidates || []).filter((x) => (x && (x.kind === KINDS.GIF || /gif|webp/i.test(x.url || '')))),
+      pageUrls: (snapshot.pageData && snapshot.pageData.urls) || [],
+    })) push(c);
+  } catch (e) { log('gif merge failed', e?.message); }
   return out;
 }
 
@@ -123,6 +134,9 @@ function buildItems(snapshot, probes) {
       } else if (kind === KINDS.DASH) {
         const item = buildDashItem(cand, probe, page, pageUrl);
         if (item) items.push(item);
+      } else if (kind === KINDS.GIF) {
+        const item = buildGifItem(cand, probe, page, pageUrl);
+        if (item) items.push(item);
       } else {
         const item = buildProgressiveItem(cand, probe, page, pageUrl);
         if (item) items.push(item);
@@ -150,9 +164,9 @@ function baseItem(cand, page, pageUrl) {
     source: cand.source,
     pageUrl,
     referer: refererFor(cand.url, pageUrl) || pageUrl || null,
-    adapter: adapter.id,
-    title: page.title || null,
-    thumbnail: page.thumbnail || null,
+    adapter: cand.kind === KINDS.GIF ? GIF_PLUGIN_ID : adapter.id,
+    title: page.title || cand.title || null,
+    thumbnail: page.thumbnail || cand.thumbnail || null,
     duration: page.duration || null,
     drm: false,
     drmSystems: [],
@@ -252,8 +266,28 @@ function buildProgressiveItem(cand, probe, page, pageUrl) {
     kind: KINDS.PROGRESSIVE,
     label: size ? undefined : 'auto',
     sizeBytes: size || null,
-    mimeType: probe?.contentType || null,
+    mimeType: probe?.contentType || cand.contentType || null,
   })];
+  return item;
+}
+
+function buildGifItem(cand, probe, page, pageUrl) {
+  // GIFs need no manifest probe: single file, download as-is (progressive path).
+  // Probe size/content-type is a bonus for the label, never a requirement.
+  const item = baseItem(cand, page, pageUrl);
+  const url = (probe && probe.finalUrl) || cand.url;
+  const size = (probe && probe.contentLength) || 0;
+  const mimeType = (probe && probe.contentType) || cand.contentType || null;
+  const label = /\.webp(\?|#|$)/i.test(url) ? 'WEBP' : 'GIF';
+  item.thumbnail = item.thumbnail || (mimeType && /image\//i.test(mimeType) ? url : item.thumbnail);
+  item.variants = [normalizeVariant({
+    url,
+    kind: KINDS.GIF,
+    label,
+    sizeBytes: size || null,
+    mimeType,
+  })];
+  if (probe && probe.ok === false && probe.error) item.error = null; // GIF probe failure is non-fatal
   return item;
 }
 
@@ -324,6 +358,51 @@ function offscreenSend(message) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * Ask the browser's download manager to save a URL (blob: or http:). This MUST run in the
+ * service worker: offscreen documents only expose chrome.runtime, not chrome.downloads.
+ */
+async function startChromeDownload({ url, filename, folder }) {
+  if (!url || !filename) throw new Error('Missing download URL or filename');
+  const path = `${folder || 'UniversalVideoDownloader'}/${filename}`;
+  const chromeId = await chrome.downloads.download({ url, filename: path, saveAs: false });
+  return { chromeId, path };
+}
+
+function chromeDownloadStatus(chromeId) {
+  return new Promise((resolve) => {
+    try {
+      chrome.downloads.search({ id: chromeId }, (items) => {
+        if (chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        const item = items && items[0];
+        if (!item) { resolve({ ok: false, error: 'not-found' }); return; }
+        resolve({ ok: true, state: item.state, filename: item.filename || null, error: item.error || null });
+      });
+    } catch (e) {
+      resolve({ ok: false, error: String(e) });
+    }
+  });
+}
+
+function usableItems(items) {
+  return (items || []).filter((it) => it && !it.drm && it.variants && it.variants.length);
+}
+
+/** Pick the highest-resolution item/variant pair. Variants are already sorted best-first. */
+function pickBestItem(items) {
+  let best = null;
+  let bestHeight = -1;
+  for (const item of items) {
+    const variant = item.variants[0];
+    const height = variantHeight(variant);
+    if (height > bestHeight) { bestHeight = height; best = { item, variant }; }
+  }
+  return best;
+}
+
+/**
  * Send a job to the offscreen document, retrying if the document was just created and its
  * module listener has not registered yet (a real race on the first download).
  */
@@ -360,7 +439,7 @@ async function startDownload({ tabId, item, variant, pageUrl }) {
   const referer = item.referer || refererFor(variant.url, pageUrl) || pageUrl || null;
   const quality = variantHeight(variant) ? `${variantHeight(variant)}p` : '';
   const folder = settings.folder;
-  const filename = buildFilename(item.title || 'video', { ext: 'mp4', quality });
+  const filename = buildFilename(item.title || 'video', { ext: extensionForVariant(variant), quality });
   const policy = decideOutputPolicy({
     sizeBytes: variant.sizeBytes || 0,
     videoCodec: variant.videoCodec || '',
@@ -378,6 +457,8 @@ async function startDownload({ tabId, item, variant, pageUrl }) {
     initUrl: variant.initUrl || null,
     segments: variant.segments || null,
     audio: (variant.extras && variant.extras.audio) || null,
+    sizeBytes: variant.sizeBytes || 0,
+    mimeType: variant.mimeType || null,
     referer,
     filename,
     folder,
@@ -462,22 +543,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const tabId = sender?.tab?.id;
           if (!tabId) throw new Error('No tab context');
           const entry = await getMediaForTab(tabId, { force: true });
-          const usable = entry.items.filter((it) => !it.drm && it.variants.length);
+          const usable = usableItems(entry.items);
           if (!usable.length) {
             // Fall back to any drm item to give a precise error.
             if (entry.items.some((it) => it.drm)) throw new Error('Only DRM-protected streams were found');
             throw new Error('No downloadable media found. Press play, then try again.');
           }
-          const pickBest = (items) => {
-            let best = null; let bestH = -1;
-            for (const it of items) {
-              const v = it.variants[0];
-              const h = variantHeight(v);
-              if (h > bestH) { bestH = h; best = { item: it, variant: v }; }
-            }
-            return best;
-          };
-          const chosen = pickBest(usable);
+          const chosen = pickBestItem(usable);
           const downloadId = await startDownload({ tabId, item: chosen.item, variant: chosen.variant, pageUrl: entry.page?.url });
           sendResponse({ ok: true, downloadId });
         } catch (e) {
@@ -491,6 +563,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const id = message.downloadId;
       downloads.delete(id);
       offscreenSend({ type: MSG.OFF_CANCEL, id }).then(() => sendResponse?.({ ok: true }));
+      return true;
+    }
+
+    // The offscreen document creates the blob URL; only this service worker may use
+    // chrome.downloads (offscreen documents only expose chrome.runtime).
+    case MSG.SAVE_FILE: {
+      (async () => {
+        try {
+          const saved = await startChromeDownload({
+            url: message.url,
+            filename: message.filename,
+            folder: message.folder,
+          });
+          sendResponse({ ok: true, chromeId: saved.chromeId, path: saved.path });
+        } catch (e) {
+          sendResponse({ ok: false, error: e?.message || String(e) });
+        }
+      })();
+      return true;
+    }
+
+    case MSG.SAVE_STATUS: {
+      chromeDownloadStatus(message.chromeId).then(sendResponse);
       return true;
     }
 
@@ -604,9 +699,10 @@ chrome.contextMenus?.onClicked?.addListener((info, tab) => {
   (async () => {
     try {
       const entry = await getMediaForTab(tab.id, { force: true });
-      const usable = entry.items.filter((it) => !it.drm && it.variants.length);
-      if (!usable.length) return;
-      await startDownload({ tabId: tab.id, item: usable[0], variant: usable[0].variants[0], pageUrl: entry.page?.url });
+      const usable = usableItems(entry.items);
+      const chosen = pickBestItem(usable);
+      if (!chosen) return;
+      await startDownload({ tabId: tab.id, item: chosen.item, variant: chosen.variant, pageUrl: entry.page?.url });
     } catch (e) { log('context menu download failed', e?.message); }
   })();
 });

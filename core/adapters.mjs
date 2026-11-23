@@ -3,8 +3,11 @@
 //
 // Adapters are optional, additive hints on top of generic network/DOM sniffing. The generic
 // adapter always works; an adapter may add a referer/UA hint or interpret a known API shape.
+// The global GIF scrape plugin (core/gifPlugin.mjs) is wired in here so GIFs benefit from
+// the same pipeline without site-specific code.
 
 import { KINDS, classifyUrl, isMediaUrl, isSegmentUrl } from './formats.mjs';
+import { looksLikeGif } from './gifPlugin.mjs';
 
 const SITE_ADAPTERS = [
   {
@@ -37,6 +40,23 @@ function pushCandidate(list, seen, raw, meta = {}) {
   if (!/^https?:/i.test(url) && !url.startsWith('blob:')) return;
   if (url.startsWith('blob:') || url.startsWith('data:')) return;
   if (isSegmentUrl(url)) return; // never surface raw segments as top-level media
+  // GIFs are first-class via the global GIF scrape plugin.
+  if (looksLikeGif(url, meta.contentType || '')) {
+    const key = `${KINDS.GIF}:${url}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    list.push({
+      url,
+      kind: KINDS.GIF,
+      source: meta.source || 'gif',
+      contentType: meta.contentType || null,
+      title: meta.title || null,
+      thumbnail: meta.thumbnail || null,
+      duration: meta.duration || null,
+      initiator: meta.initiator || 'gif-scrape',
+    });
+    return;
+  }
   const kind = classifyUrl(url, meta.contentType || '') || KINDS.HLS; // heuristics: unknown but media-ish
   if (!kind) return;
   const key = `${kind}:${url}`;
@@ -95,6 +115,15 @@ export function interpretPageData(pageData, pageUrl) {
     else pushCandidate(out, seen, item.url, { ...meta, contentType: item.contentType, initiator: item.initiator });
   }
 
+  // 2b. GIF-first: og:image / twitter:image + meta gif fields (global GIF scrape plugin).
+  // These are often the canonical GIF on meme/board sites where the <img> is lazy-loaded.
+  for (const mk of ['ogImage', 'twitterImage', 'ogVideo', 'twitterStream']) {
+    const mv = pageData?.meta?.[mk];
+    if (typeof mv === 'string' && looksLikeGif(mv, '')) {
+      pushCandidate(out, seen, mv, { ...meta, initiator: `meta:${mk}` });
+    }
+  }
+
   // 3. Nested structures: recursively hunt for media-looking strings (bounded depth)
   const hunt = (obj, depth, path) => {
     if (depth > 5 || obj == null) return;
@@ -108,7 +137,7 @@ export function interpretPageData(pageData, pageUrl) {
     }
     if (typeof obj === 'object') {
       for (const k of Object.keys(obj)) {
-        if (/^(videoUrl|src|file|url|playlist|manifest|hls|dash|mp4|source)$/i.test(k)) {
+        if (/^(videoUrl|src|file|url|playlist|manifest|hls|dash|mp4|source|gif|image|poster|srcset)$/i.test(k)) {
           const v = obj[k];
           if (typeof v === 'string') pushCandidate(out, seen, v, { ...meta, initiator: `${path}.${k}` });
         }

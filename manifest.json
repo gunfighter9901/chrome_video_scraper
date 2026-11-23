@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Universal Video Downloader",
-  "version": "5.0.0",
+  "version": "5.2.0",
   "description": "Detect and download HLS, DASH and progressive video from any site — light on memory, works on low-end machines.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -44,9 +44,7 @@
         "offscreen.html",
         "offscreen.js"
       ],
-      "matches": [
-        "<all_urls>"
-      ]
+      "matches": ["<all_urls>"]
     }
   ],
   "content_security_policy": {

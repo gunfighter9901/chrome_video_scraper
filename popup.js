@@ -52,7 +52,7 @@ function render() {
 }
 
 function sourceBadge(item) {
-  const map = { hls: 'HLS', dash: 'DASH', progressive: 'MP4', network: 'net', perf: 'perf', dom: 'dom' };
+  const map = { hls: 'HLS', dash: 'DASH', progressive: 'MP4', gif: 'GIF', network: 'net', perf: 'perf', dom: 'dom' };
   return map[item.kind] || (item.kind || 'media').toUpperCase();
 }
 

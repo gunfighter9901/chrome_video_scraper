@@ -40,7 +40,7 @@ test('entry modules and scripts referenced by the build exist', async () => {
     'background.js', 'popup.js', 'offscreen.js', 'offscreen.html', 'popup.html',
     'content/sniffer.js', 'content/panel.js', 'content/button.js',
     'core/messaging.mjs', 'core/hls.mjs', 'core/dash.mjs', 'core/formats.mjs',
-    'core/adapters.mjs', 'core/opfs.mjs', 'core/pipeline.mjs',
+    'core/adapters.mjs', 'core/opfs.mjs', 'core/pipeline.mjs', 'core/gifPlugin.mjs',
     'modules/hls2mp4/simple-converter.mjs', 'modules/FSBlob.mjs',
     'modules/mediabunny/dist/bundles/mediabunny.min.mjs',
   ];

@@ -168,7 +168,6 @@ async function fetchSegment(job, url, { range, signal } = {}) {
       const backoff = 400 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 300);
       postProgress(job.id, { status: `Retry ${attempt}/${MAX_SEGMENT_RETRIES}…` });
       await sleep(backoff);
-      await sleep(backoff);
     }
   }
 }
@@ -479,6 +478,7 @@ async function downloadDash(job) {
   const writer = await createWritable(nextName('dash'));
   const target = new StreamTarget(writer.writable, { chunked: false });
   const output = new Output({ format: new Mp4OutputFormat({ fastStart: 'fragmented', minimumFragmentDuration: 1 }), target });
+  const videoList = job.segments || [];
 
   let videoSource = null;
   let audioSource = null;
@@ -528,7 +528,6 @@ async function downloadDash(job) {
   };
 
   try {
-    const videoList = job.segments || [];
     if (!videoList.length) throw new Error('DASH manifest could not be parsed - press Rescan and retry');
     await feedList(videoList, job.initUrl, 0, 80);
     if (job.audio && job.audio.segments && job.audio.segments.length) {

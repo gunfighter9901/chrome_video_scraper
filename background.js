@@ -352,6 +352,22 @@ function chromeDownloadStatus(chromeId) {
   });
 }
 
+function usableItems(items) {
+  return (items || []).filter((it) => it && !it.drm && it.variants && it.variants.length);
+}
+
+/** Pick the highest-resolution item/variant pair. Variants are already sorted best-first. */
+function pickBestItem(items) {
+  let best = null;
+  let bestHeight = -1;
+  for (const item of items) {
+    const variant = item.variants[0];
+    const height = variantHeight(variant);
+    if (height > bestHeight) { bestHeight = height; best = { item, variant }; }
+  }
+  return best;
+}
+
 /**
  * Send a job to the offscreen document, retrying if the document was just created and its
  * module listener has not registered yet (a real race on the first download).
@@ -491,22 +507,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const tabId = sender?.tab?.id;
           if (!tabId) throw new Error('No tab context');
           const entry = await getMediaForTab(tabId, { force: true });
-          const usable = entry.items.filter((it) => !it.drm && it.variants.length);
+          const usable = usableItems(entry.items);
           if (!usable.length) {
             // Fall back to any drm item to give a precise error.
             if (entry.items.some((it) => it.drm)) throw new Error('Only DRM-protected streams were found');
             throw new Error('No downloadable media found. Press play, then try again.');
           }
-          const pickBest = (items) => {
-            let best = null; let bestH = -1;
-            for (const it of items) {
-              const v = it.variants[0];
-              const h = variantHeight(v);
-              if (h > bestH) { bestH = h; best = { item: it, variant: v }; }
-            }
-            return best;
-          };
-          const chosen = pickBest(usable);
+          const chosen = pickBestItem(usable);
           const downloadId = await startDownload({ tabId, item: chosen.item, variant: chosen.variant, pageUrl: entry.page?.url });
           sendResponse({ ok: true, downloadId });
         } catch (e) {
@@ -656,9 +663,10 @@ chrome.contextMenus?.onClicked?.addListener((info, tab) => {
   (async () => {
     try {
       const entry = await getMediaForTab(tab.id, { force: true });
-      const usable = entry.items.filter((it) => !it.drm && it.variants.length);
-      if (!usable.length) return;
-      await startDownload({ tabId: tab.id, item: usable[0], variant: usable[0].variants[0], pageUrl: entry.page?.url });
+      const usable = usableItems(entry.items);
+      const chosen = pickBestItem(usable);
+      if (!chosen) return;
+      await startDownload({ tabId: tab.id, item: chosen.item, variant: chosen.variant, pageUrl: entry.page?.url });
     } catch (e) { log('context menu download failed', e?.message); }
   })();
 });

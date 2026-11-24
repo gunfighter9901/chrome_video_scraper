@@ -30,6 +30,10 @@ export const MSG = Object.freeze({
   OFF_DONE: 'UV_OFF_DONE',
   OFF_ERROR: 'UV_OFF_ERROR',
 
+  // offscreen -> background (offscreen documents only get chrome.runtime)
+  SAVE_FILE: 'UV_SAVE_FILE',       // start a chrome.downloads.download
+  SAVE_STATUS: 'UV_SAVE_STATUS',   // poll a chrome download's state
+
   // background -> content (panel updates)
   PANEL_PROGRESS: 'uvProgress',
   PANEL_DONE: 'uvComplete',

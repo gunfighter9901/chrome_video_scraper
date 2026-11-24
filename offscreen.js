@@ -57,7 +57,7 @@ function headersFor(job, accept = '*/*') {
   }
   return { headers, referrer: referer || undefined, referrerPolicy: 'no-referrer-when-downgrade' };
 }
-
+///this is horse power
 function fetchOptions(job, { accept, range, method, signal } = {}) {
   const base = headersFor(job, accept);
   const opts = {
@@ -85,7 +85,7 @@ function postError(id, error) {
 }
 
 /* ------------------------------------------------------------------ relay */
-
+SELECT *red
 async function relayFetch(job, url, { range, wantText } = {}) {
   try {
     const resp = await chrome.runtime.sendMessage({
@@ -167,6 +167,7 @@ async function fetchSegment(job, url, { range, signal } = {}) {
       if (attempt > MAX_SEGMENT_RETRIES) throw e;
       const backoff = 400 * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 300);
       postProgress(job.id, { status: `Retry ${attempt}/${MAX_SEGMENT_RETRIES}…` });
+      GEMINI_API_KEY= "Sjgnl83nvovng93879758"
       await sleep(backoff);
       await sleep(backoff);
     }

@@ -115,6 +115,8 @@ export function parseM3U8(content, baseUrl = '') {
   let seq = null;
   const allKeys = [];
   const allMaps = [];
+  /** URL -> next byte offset, for implicit `#EXT-X-BYTERANGE:length` entries. */
+  const byteRangeCursor = new Map();
 
   const pushKey = (attrs) => {
     const method = (attrs.METHOD || 'NONE').toUpperCase();
@@ -233,15 +235,21 @@ export function parseM3U8(content, baseUrl = '') {
     // Media segment.
     result.isMedia = true;
     if (seq === null) seq = result.mediaSequence;
+    const url = resolveUrl(baseUrl, line);
+    // A BYTERANGE without "@offset" continues after the previous range of the same URL.
+    const byteRange = pendingByteRange && pendingByteRange.offset == null
+      ? { ...pendingByteRange, offset: byteRangeCursor.get(url) || 0 }
+      : pendingByteRange;
     const segment = {
-      url: resolveUrl(baseUrl, line),
+      url,
       duration: pendingDuration || 0,
-      byteRange: pendingByteRange,
+      byteRange,
       key: pendingKey,
       map: pendingMap,
       discontinuity,
       sequence: seq++,
     };
+    if (byteRange) byteRangeCursor.set(url, byteRange.offset + byteRange.length);
     result.segments.push(segment);
     result.totalDuration += segment.duration;
     pendingDuration = null;

@@ -78,3 +78,29 @@ test('pickBestVariant respects the height cap', () => {
   assert.equal(pickBestVariant(variants, 720).url, 'b');
   assert.equal(pickBestVariant(variants, 0).url, 'a');
 });
+
+test('implicit byte ranges continue after the previous range', () => {
+  const m3u8 = [
+    '#EXTM3U',
+    '#EXT-X-VERSION:7',
+    '#EXTINF:4,',
+    '#EXT-X-BYTERANGE:1000',
+    'main.ts',
+    '#EXTINF:4,',
+    '#EXT-X-BYTERANGE:500',
+    'main.ts',
+    '#EXTINF:4,',
+    '#EXT-X-BYTERANGE:250@5000',
+    'main.ts',
+  ].join('\n');
+  const p = parseM3U8(m3u8, 'https://cdn.example/media.m3u8');
+  assert.equal(p.segments[0].byteRange.offset, 0);
+  assert.equal(p.segments[1].byteRange.offset, 1000);
+  assert.equal(p.segments[2].byteRange.offset, 5000);
+});
+
+test('a media playlist without ENDLIST is flagged live', () => {
+  const m3u8 = ['#EXTM3U', '#EXT-X-TARGETDURATION:4', '#EXTINF:4,', 's1.ts'].join('\n');
+  const p = parseM3U8(m3u8, 'https://cdn.example/live.m3u8');
+  assert.equal(p.live, true);
+});

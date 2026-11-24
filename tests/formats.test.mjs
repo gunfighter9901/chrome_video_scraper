@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   classifyUrl, KINDS, mediaKey, sortVariants, parseQuality,
-  buildFilename, sanitizeFilename, decideOutputPolicy, codecCompat,
+  buildFilename, sanitizeFilename, extensionForVariant, decideOutputPolicy, codecCompat,
   formatBytes, deviceProfile, isFmp4Segments, isSegmentUrl,
 } from '../core/formats.mjs';
 
@@ -43,6 +43,16 @@ test('parseQuality', () => {
 test('filename sanitization', () => {
   assert.equal(sanitizeFilename('a/b:c*d?"e<f>g|h'), 'abcdefgh');
   assert.equal(buildFilename('My Video', { ext: 'mp4', quality: '720p' }), 'My Video [720p].mp4');
+});
+
+test('output extension follows the variant container', () => {
+  assert.equal(extensionForVariant({ kind: KINDS.HLS, url: 'https://x/a.m3u8' }), 'mp4');
+  assert.equal(extensionForVariant({ kind: KINDS.DASH, url: 'https://x/a.mpd' }), 'mp4');
+  assert.equal(extensionForVariant({ kind: KINDS.PROGRESSIVE, url: 'https://x/a.webm' }), 'webm');
+  assert.equal(extensionForVariant({ kind: KINDS.PROGRESSIVE, url: 'https://x/a', mimeType: 'video/matroska' }), 'mkv');
+  assert.equal(extensionForVariant({ kind: KINDS.PROGRESSIVE, url: 'https://x/a.m4v' }), 'mp4');
+  assert.equal(extensionForVariant({ kind: KINDS.PROGRESSIVE, url: 'https://x/a' }), 'mp4');
+  assert.equal(extensionForVariant(null), 'mp4');
 });
 
 test('output policy: size threshold and codec compatibility', () => {
